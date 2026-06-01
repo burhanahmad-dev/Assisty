@@ -7,20 +7,19 @@ import {
 import { ConfigService } from '@nestjs/config';
 import PgBoss from 'pg-boss';
 import type { AppConfig } from '../config/configuration';
-import type { QueueName } from './queue.constants';
+import { QUEUES, type QueueName } from './queue.constants';
 
 /**
  * Thin wrapper around pg-boss (Postgres-backed job queue, NO Redis).
  *
  * Lifecycle:
- *  - onModuleInit  -> new PgBoss(DATABASE_URL) + boss.start() (pg-boss creates
- *                     its own schema/tables automatically on first boot).
- *  - onModuleDestroy -> boss.stop({ graceful: true }) so in-flight jobs finish.
+ *  - onModuleInit  -> new PgBoss(...) + start() + createQueue() for each queue
+ *                     (pg-boss v10 requires queues to exist before send/work).
+ *  - onModuleDestroy -> stop({ graceful: true }) so in-flight jobs finish.
  *
  * Idempotency is handled OUTSIDE this service:
- *  - WebhookEventsRepository.tryClaim at ingest time (dedupe webhook deliveries)
- *  - messages.channel_message_id UNIQUE at processing time (dedupe re-runs)
- * So enqueue() does not attempt single-active dedupe itself.
+ *  - WebhookEventsRepository.tryClaim at ingest (dedupe webhook deliveries)
+ *  - messages.channel_message_id UNIQUE at processing (idempotent inbound)
  */
 @Injectable()
 export class QueueService implements OnModuleInit, OnModuleDestroy {
@@ -32,18 +31,50 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     const databaseUrl = this.config.get('database', { infer: true }).url;
 
-    this.boss = new PgBoss(databaseUrl);
+    // node-pg now treats sslmode=require as verify-full, which rejects Supabase's
+    // pooler certificate chain ("self-signed certificate in certificate chain").
+    // Strip the sslmode query and pass an explicit ssl option (encrypt, do not
+    // verify) for remote hosts; local/docker Postgres connects without TLS.
+    let connectionString = databaseUrl;
+    let host = '';
+    try {
+      const parsed = new URL(databaseUrl);
+      host = parsed.hostname;
+      parsed.searchParams.delete('sslmode');
+      connectionString = parsed.toString();
+    } catch {
+      connectionString = databaseUrl;
+    }
+    const isLocal = ['localhost', '127.0.0.1', '::1', 'postgres'].includes(host);
+
+    this.boss = new PgBoss(
+      isLocal
+        ? { connectionString }
+        : { connectionString, ssl: { rejectUnauthorized: false } },
+    );
 
     // Surface pg-boss internal errors through structured logging.
     this.boss.on('error', (error) => {
-      this.logger.error(
-        { err: error },
-        'pg-boss emitted an internal error',
-      );
+      this.logger.error({ err: error }, 'pg-boss emitted an internal error');
     });
 
     await this.boss.start();
-    this.logger.log('pg-boss started');
+
+    // pg-boss v10 makes queues explicit: send()/work() to a non-existent queue
+    // is silently dropped. Create each known queue on boot (idempotent).
+    for (const queue of Object.values(QUEUES)) {
+      try {
+        await this.boss.createQueue(queue);
+      } catch (err) {
+        this.logger.warn({
+          msg: 'queue.create.skipped',
+          queue,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    this.logger.log({ msg: 'pg-boss started', queues: Object.values(QUEUES) });
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -62,13 +93,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Enqueue a job onto a queue.
-   *
-   * Defaults: retryLimit 5 with exponential backoff so transient failures
-   * (LLM 429/5xx, network blips, WhatsApp Graph hiccups) are retried reliably.
-   * Callers may override any send option via `opts`.
-   *
-   * @returns the pg-boss job id, or null if pg-boss debounced/throttled it away.
+   * Enqueue a job. Defaults: retryLimit 5 with exponential backoff so transient
+   * failures (LLM 429/5xx, network blips, WhatsApp Graph hiccups) are retried.
+   * @returns the pg-boss job id, or null if pg-boss debounced/dropped it.
    */
   async enqueue<T extends object>(
     name: QueueName,
@@ -88,10 +115,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Register a worker for a queue. pg-boss invokes the handler with a batch of
-   * jobs; we pin batchSize to 1 for simple, readable, one-job-at-a-time
-   * processing. Handlers should try/catch + log, then RETHROW on failure so
-   * pg-boss applies the retry policy attached at enqueue time.
+   * Register a worker for a queue. batchSize 1 = simple one-job-at-a-time
+   * processing. Handlers RETHROW on failure so pg-boss applies the retry policy.
    */
   async work<T extends object>(
     name: QueueName,

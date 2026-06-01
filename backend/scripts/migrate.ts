@@ -11,6 +11,7 @@
  *
  * Usage: npm run migrate
  */
+import './load-env';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import postgres from 'postgres';
