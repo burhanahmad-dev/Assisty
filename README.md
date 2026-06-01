@@ -54,3 +54,42 @@ Assisty/
 - **Models:** GPT + Gemini + free models (Anthropic addable later)
 - **Markets:** US + Pakistan + global, except Israel
 - **Deferred:** live Shopify sync, agency mode
+
+---
+
+## Local development
+
+The backend is a NestJS monolith on Postgres (pgvector) with a LiteLLM gateway,
+all wired up via Docker Compose.
+
+```bash
+# 1. Configure env (no real secrets in the example)
+cp .env.example .env
+# edit .env: set OPENAI_API_KEY, LITELLM_MASTER_KEY (= LITELLM_API_KEY),
+#            WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET
+
+# 2. Start postgres + litellm + api
+docker compose up --build
+
+# 3. Apply SQL migrations (idempotent)
+docker compose exec api npm run migrate
+#   ...or from the host against localhost:5432:
+#   cd backend && DATABASE_URL=postgresql://assisty:assisty@localhost:5432/assisty npm run migrate
+
+# 4. Verify
+curl http://localhost:3000/health
+curl http://localhost:3000/health/db
+```
+
+Services: **postgres** (5432, pgvector + queue), **litellm** (4000, model gateway),
+**api** (3000, NestJS `start:dev`). `pg-boss` provisions its own queue schema on
+boot — no manual setup.
+
+## Deploy
+
+Production runs on **Railway** (builds `backend/Dockerfile`, health check at
+`/health`) against **Supabase** hosted Postgres. LiteLLM can run as a second
+Railway service or be replaced by pointing `LITELLM_BASE_URL` straight at
+OpenRouter. WhatsApp webhooks land at `/webhooks/whatsapp` (Meta verify token +
+`X-Hub-Signature-256` HMAC). Full instructions, env var list, and Meta webhook
+setup are in [docs/DEPLOY.md](./docs/DEPLOY.md).

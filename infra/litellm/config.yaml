@@ -1,0 +1,38 @@
+# LiteLLM proxy configuration for Assisty.
+# The backend talks to this proxy via the OpenAI SDK (LITELLM_BASE_URL).
+# Each model_list entry maps a friendly "model_name" to an upstream provider.
+#
+# Add Anthropic here later — one entry, no code change. For example:
+#   - model_name: claude-3-5-sonnet
+#     litellm_params:
+#       model: anthropic/claude-3-5-sonnet-latest
+#       api_key: os.environ/ANTHROPIC_API_KEY
+# ...then it becomes selectable via DEFAULT_CHAT_MODEL or a per-request model id.
+
+model_list:
+  # --- OpenAI chat ---------------------------------------------------------
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # --- Google Gemini chat --------------------------------------------------
+  - model_name: gemini-1.5-flash
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  # --- OpenRouter (free / cheap fallback example) --------------------------
+  - model_name: openrouter-gpt-4o-mini
+    litellm_params:
+      model: openrouter/openai/gpt-4o-mini
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # --- Embeddings ----------------------------------------------------------
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
