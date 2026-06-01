@@ -16,23 +16,36 @@ import { ChannelConnectionsRepository } from '../database/repositories/channel-c
 import { UsageRepository } from '../database/repositories/usage.repository';
 
 /**
+ * Sent to the customer when the AI cannot produce a reply (even after the
+ * AiService's own internal retry). Guarantees a customer is NEVER left without
+ * a response — a core reliability requirement.
+ */
+export const FALLBACK_REPLY =
+  "Sorry — I'm having trouble answering that right now. I've passed your message on and a team member will follow up shortly.";
+
+/**
  * The "brain" of Assisty — a deterministic, linear pipeline (NO LangGraph, NO
- * fancy orchestration). It consumes INBOUND_MESSAGE jobs enqueued by the
- * channel controllers and runs, top-to-bottom:
+ * fancy orchestration). It consumes INBOUND_MESSAGE jobs and runs top-to-bottom:
  *
- *   (1) idempotency guard (messages.channel_message_id)
- *   (2) find-or-create conversation
- *   (3) persist the inbound message
- *   (4) RAG retrieve
- *   (5) build the prompt (persona + grounding context + recent history + user)
- *   (6) chat completion
- *   (7) persist the outbound message
- *   (8) send the reply over the originating channel
- *   (9) record usage (ai_tokens + messages)
+ *   (1) find-or-create conversation
+ *   (2) persist the inbound message  (idempotent: ON CONFLICT DO NOTHING)
+ *   (3) RAG retrieve (best-effort — degrades to no-context, never fails the turn)
+ *   (4) build the prompt (persona + grounding + recent history + user)
+ *   (5) chat completion WITH a graceful fallback reply if the AI fails
+ *   (6) persist the outbound message (real reply OR fallback)
+ *   (7) send the reply over the originating channel
+ *   (8) record usage (best-effort)
  *
- * On ANY failure we log with full context and rethrow so pg-boss applies the
- * retry policy attached at enqueue time. Idempotency (steps 1 + 3) makes those
- * retries safe.
+ * Idempotency / safe retries:
+ *   - Duplicate webhook DELIVERIES are stopped at ingest by webhook_events.
+ *   - Step (2) is idempotent, so a pg-boss RETRY (which only happens when a
+ *     later step throws — e.g. the channel send fails) re-runs cleanly and the
+ *     reply is re-attempted instead of being silently skipped.
+ *   - AI failures do NOT throw (they fall back), so we never burn retries on a
+ *     down model; only genuine infra failures (DB / channel send) trigger a
+ *     retry. A send-failure retry may persist a duplicate outbound row in the
+ *     rare case the channel API is unreachable — an acceptable MVP trade for
+ *     guaranteed delivery.
  */
 @Injectable()
 export class InboundProcessor implements OnModuleInit {
@@ -53,11 +66,13 @@ export class InboundProcessor implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.queue.work<InboundJobData>(
-      QUEUES.INBOUND_MESSAGE,
-      (job) => this.handle(job),
+    await this.queue.work<InboundJobData>(QUEUES.INBOUND_MESSAGE, (job) =>
+      this.handle(job),
     );
-    this.logger.log({ msg: 'inbound.processor.registered', queue: QUEUES.INBOUND_MESSAGE });
+    this.logger.log({
+      msg: 'inbound.processor.registered',
+      queue: QUEUES.INBOUND_MESSAGE,
+    });
   }
 
   private async handle(job: Job<InboundJobData>): Promise<void> {
@@ -79,20 +94,14 @@ export class InboundProcessor implements OnModuleInit {
     this.logger.log({ msg: 'inbound.start', ...ctx });
 
     try {
-      // (1) Idempotency: if we already stored this provider message, stop.
-      if (await this.messages.existsByChannelMessageId(channelMessageId)) {
-        this.logger.log({ msg: 'inbound.skip.duplicate', ...ctx });
-        return;
-      }
-
-      // (2) Find or create the conversation for this customer + connection.
+      // (1) Find or create the conversation for this customer + connection.
       const conversation = await this.conversations.findOrCreate(
         tenantId,
         channelConnectionId,
         customerExternalId,
       );
 
-      // (3) Persist the inbound message.
+      // (2) Persist the inbound message (idempotent — safe under retries).
       await this.messages.insertInbound({
         tenantId,
         conversationId: conversation.id,
@@ -100,39 +109,56 @@ export class InboundProcessor implements OnModuleInit {
         content: text,
       });
 
-      // (4) Retrieve grounding context from the knowledge base.
+      // (3) Retrieve grounding context (best-effort; never fails the turn).
       const chunks = await this.rag.retrieve(tenantId, text);
       const contextBlock = this.rag.buildContextBlock(chunks);
 
-      // (5) Build the chat prompt.
+      // (4) Build the chat prompt from persona + context + recent history.
       const history = await this.messages.recentByConversation(
         conversation.id,
         InboundProcessor.HISTORY_LIMIT,
       );
       const promptMessages = this.buildMessages(contextBlock, history, text);
 
-      // (6) Chat completion via LiteLLM.
-      const result = await this.ai.chat({ messages: promptMessages });
-      const reply = result.content.trim();
+      // (5) Chat completion WITH graceful fallback. AiService already does one
+      //     internal retry on 429/5xx; if it still fails we reply with a
+      //     fallback rather than leaving the customer hanging.
+      let reply: string;
+      let model = 'fallback';
+      let usageTokens = 0;
+      let usedFallback = false;
 
-      if (!reply) {
-        // A blank completion is treated as a failure so pg-boss retries.
-        throw new Error('AI returned an empty completion');
+      try {
+        const result = await this.ai.chat({ messages: promptMessages });
+        reply = result.content.trim();
+        if (!reply) {
+          throw new Error('AI returned an empty completion');
+        }
+        model = result.model;
+        usageTokens = result.usageTokens;
+      } catch (aiErr) {
+        this.logger.error({
+          msg: 'inbound.ai_failed.fallback',
+          ...ctx,
+          error: aiErr instanceof Error ? aiErr.message : String(aiErr),
+        });
+        reply = FALLBACK_REPLY;
+        usedFallback = true;
       }
 
-      // (7) Persist the outbound message.
+      // (6) Persist the outbound message (real reply or fallback).
       await this.messages.insertOutbound({
         tenantId,
         conversationId: conversation.id,
         content: reply,
-        model: result.model,
-        tokens: result.usageTokens,
+        model,
+        tokens: usageTokens,
       });
 
-      // (8) Send the reply over the originating channel.
-      const connection = await this.channelConnections.findById(
-        channelConnectionId,
-      );
+      // (7) Send the reply over the originating channel. A failure here throws
+      //     -> pg-boss retries (step 2 keeps that safe).
+      const connection =
+        await this.channelConnections.findById(channelConnectionId);
       if (!connection) {
         throw new Error(
           `Channel connection ${channelConnectionId} not found while replying`,
@@ -140,16 +166,17 @@ export class InboundProcessor implements OnModuleInit {
       }
       await this.whatsapp.sendText(connection, customerExternalId, reply);
 
-      // (9) Record usage. Best-effort: a ledger write failure must not undo a
-      // delivered reply or trigger a retry that would double-send.
+      // (8) Record usage. Best-effort: a ledger write failure must not undo a
+      //     delivered reply or trigger a retry that would double-send.
       try {
-        await this.usage.record(tenantId, 'ai_tokens', result.usageTokens);
+        await this.usage.record(tenantId, 'ai_tokens', usageTokens);
         await this.usage.record(tenantId, 'messages', 1);
       } catch (usageErr) {
         this.logger.warn({
           msg: 'inbound.usage.record_failed',
           ...ctx,
-          error: usageErr instanceof Error ? usageErr.message : String(usageErr),
+          error:
+            usageErr instanceof Error ? usageErr.message : String(usageErr),
         });
       }
 
@@ -157,8 +184,9 @@ export class InboundProcessor implements OnModuleInit {
         msg: 'inbound.done',
         ...ctx,
         conversationId: conversation.id,
-        model: result.model,
-        usageTokens: result.usageTokens,
+        model,
+        usageTokens,
+        usedFallback,
       });
     } catch (err) {
       this.logger.error({

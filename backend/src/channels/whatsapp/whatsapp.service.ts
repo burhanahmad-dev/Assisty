@@ -131,6 +131,21 @@ export class WhatsappService {
   ): Promise<void> {
     const wa = this.config.get('whatsapp', { infer: true });
 
+    // Local-dev / testing short-circuit: log the would-be send and return, so
+    // the full pipeline runs without a real WhatsApp number or access token.
+    if (wa.dryRun) {
+      this.logger.info(
+        {
+          channelConnectionId: connection.id,
+          tenantId: connection.tenantId,
+          to,
+          preview: text.slice(0, 160),
+        },
+        'WhatsApp DRY RUN — reply generated + persisted but NOT sent',
+      );
+      return;
+    }
+
     const accessToken = connection.accessToken ?? wa.accessToken;
     const phoneNumberId = connection.phoneNumberId ?? wa.phoneNumberId;
 

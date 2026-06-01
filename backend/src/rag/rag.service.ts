@@ -40,17 +40,22 @@ export class RagService {
       return [];
     }
 
-    const embedding = await this.ai.embed(trimmed);
-    const chunks = await this.kb.searchChunks(tenantId, embedding, k);
-
-    this.logger.log({
-      msg: 'rag.retrieve',
-      tenantId,
-      k,
-      hits: chunks.length,
-    });
-
-    return chunks;
+    try {
+      const embedding = await this.ai.embed(trimmed);
+      const chunks = await this.kb.searchChunks(tenantId, embedding, k);
+      this.logger.log({ msg: 'rag.retrieve', tenantId, k, hits: chunks.length });
+      return chunks;
+    } catch (err) {
+      // Best-effort retrieval: if embeddings/vector search fail (no embedding
+      // provider configured yet, an empty KB, or a transient error), degrade to
+      // "no context" rather than failing the whole turn.
+      this.logger.warn({
+        msg: 'rag.retrieve.degraded',
+        tenantId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   /**

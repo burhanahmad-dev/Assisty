@@ -47,13 +47,21 @@ export class MessagesRepository {
     return rows[0]?.exists ?? false;
   }
 
-  async insertInbound(input: InsertInboundInput): Promise<MessageRow> {
+  /**
+   * Persist an inbound message. IDEMPOTENT: a pg-boss retry (or a duplicate that
+   * slipped past webhook_events) will not create a second row, thanks to the
+   * partial UNIQUE index on channel_message_id. Returns the inserted row, or
+   * null when it already existed (conflict) — callers may ignore the result.
+   */
+  async insertInbound(input: InsertInboundInput): Promise<MessageRow | null> {
     const rows = await this.db.sql<MessageRow[]>`
       INSERT INTO messages
         (tenant_id, conversation_id, direction, role, channel_message_id, content)
       VALUES
         (${input.tenantId}, ${input.conversationId}, 'inbound', 'user',
          ${input.channelMessageId}, ${input.content})
+      ON CONFLICT (channel_message_id) WHERE channel_message_id IS NOT NULL
+        DO NOTHING
       RETURNING
         id,
         tenant_id          AS "tenantId",
@@ -66,7 +74,7 @@ export class MessagesRepository {
         tokens,
         created_at         AS "createdAt"
     `;
-    return rows[0];
+    return rows[0] ?? null;
   }
 
   async insertOutbound(input: InsertOutboundInput): Promise<MessageRow> {

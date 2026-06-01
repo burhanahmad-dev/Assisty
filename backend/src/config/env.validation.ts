@@ -29,6 +29,13 @@ export const envSchema = z.object({
   WHATSAPP_APP_SECRET: z.string().min(1, 'WHATSAPP_APP_SECRET is required'),
   WHATSAPP_GRAPH_VERSION: z.string().default('v21.0'),
 
+  // Local-testing toggle: when 'true'/'1', WhatsApp sends are LOGGED instead of
+  // calling the Graph API, so the full loop runs without a real number.
+  WHATSAPP_DRY_RUN: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+
   // Optional single-tenant dev fallbacks (per-tenant values live in DB).
   WHATSAPP_ACCESS_TOKEN: z.string().optional(),
   WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),

@@ -2,9 +2,7 @@ import { envSchema, type Env } from './env.validation';
 
 /**
  * Typed, nested application configuration object.
- * Read via ConfigService.get<...>('namespace') — e.g.
- *   const ai = configService.get<AppConfig['ai']>('ai');
- * or with the typed helper below.
+ * Read via ConfigService.get('namespace', { infer: true }).
  */
 export interface AppConfig {
   env: Env['NODE_ENV'];
@@ -27,6 +25,8 @@ export interface AppConfig {
     verifyToken: string;
     appSecret: string;
     graphVersion: string;
+    /** When true, sendText logs the reply instead of calling the Graph API. */
+    dryRun: boolean;
     /** Single-tenant dev fallback only; real tokens live in channel_connections. */
     accessToken?: string;
     phoneNumberId?: string;
@@ -35,8 +35,8 @@ export interface AppConfig {
 
 /**
  * ConfigModule `load` factory. Re-parses process.env through the same zod
- * schema (cheap, deterministic) so defaults are applied, then maps the flat
- * env into the nested AppConfig shape.
+ * schema (cheap, deterministic) so defaults/coercions are applied, then maps
+ * the flat env into the nested AppConfig shape.
  */
 export default function configuration(): AppConfig {
   const env = envSchema.parse(process.env);
@@ -62,6 +62,7 @@ export default function configuration(): AppConfig {
       verifyToken: env.WHATSAPP_VERIFY_TOKEN,
       appSecret: env.WHATSAPP_APP_SECRET,
       graphVersion: env.WHATSAPP_GRAPH_VERSION,
+      dryRun: env.WHATSAPP_DRY_RUN,
       accessToken: env.WHATSAPP_ACCESS_TOKEN,
       phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
     },
