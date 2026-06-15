@@ -10,10 +10,22 @@ import {
 
 import { WebChatService } from './web-chat.service';
 import { Public } from '../auth/public.decorator';
+import { Throttle } from '@nestjs/throttler';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
-interface ChatBody {
+class ChatBody {
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
   sessionId?: string;
-  text?: string;
+
+  @IsString()
+  @MaxLength(4000)
+  text!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(6000)
   businessContext?: string;
 }
 
@@ -29,6 +41,7 @@ export class WebController {
   }
 
   @Post('web/chat')
+  @Throttle({ default: { limit: 20, ttl: 60000 } }) // public + cost-bearing: 20/min/IP
   async chat(@Body() body: ChatBody): Promise<unknown> {
     if (!body || typeof body.text !== 'string' || !body.text.trim()) {
       throw new BadRequestException('text is required');

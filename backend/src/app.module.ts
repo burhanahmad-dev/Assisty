@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { LoggerModule } from 'nestjs-pino';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 
 import configuration, { type AppConfig } from './config/configuration';
 import { validate } from './config/env.validation';
@@ -42,6 +44,7 @@ import { WebModule } from './web/web.module';
     }),
 
     // 3. Global infrastructure.
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 120 }]), // 120 req/min/IP default
     DatabaseModule,
     QueueModule,
     AuthModule, // registers the global AuthGuard
@@ -61,6 +64,10 @@ import { WebModule } from './web/web.module';
 
     // 6. Web console + widget.
     WebModule,
+  ],
+  providers: [
+    // Global IP rate limiting (abuse protection). Per-route overrides via @Throttle.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}
