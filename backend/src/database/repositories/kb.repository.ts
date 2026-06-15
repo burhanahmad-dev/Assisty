@@ -33,16 +33,18 @@ export class KbRepository {
     k: number,
   ): Promise<KbSearchResult[]> {
     const literal = toVectorLiteral(embedding);
-    const rows = await this.db.sql<KbSearchResult[]>`
-      SELECT
-        content,
-        1 - (embedding <=> ${literal}::vector) AS similarity
-      FROM kb_chunks
-      WHERE tenant_id = ${tenantId}
-      ORDER BY embedding <=> ${literal}::vector ASC
-      LIMIT ${k}
-    `;
-    return rows;
+    return this.db.scoped(tenantId, async (sql) => {
+      const rows = await sql<KbSearchResult[]>`
+        SELECT
+          content,
+          1 - (embedding <=> ${literal}::vector) AS similarity
+        FROM kb_chunks
+        WHERE tenant_id = ${tenantId}
+        ORDER BY embedding <=> ${literal}::vector ASC
+        LIMIT ${k}
+      `;
+      return rows;
+    });
   }
 
   async insertChunk(
@@ -52,16 +54,18 @@ export class KbRepository {
     embedding: number[],
   ): Promise<KbChunkRow> {
     const literal = toVectorLiteral(embedding);
-    const rows = await this.db.sql<KbChunkRow[]>`
-      INSERT INTO kb_chunks (tenant_id, document_id, content, embedding)
-      VALUES (${tenantId}, ${documentId}, ${content}, ${literal}::vector)
-      RETURNING
-        id,
-        tenant_id   AS "tenantId",
-        document_id AS "documentId",
-        content,
-        created_at  AS "createdAt"
-    `;
-    return rows[0];
+    return this.db.scoped(tenantId, async (sql) => {
+      const rows = await sql<KbChunkRow[]>`
+        INSERT INTO kb_chunks (tenant_id, document_id, content, embedding)
+        VALUES (${tenantId}, ${documentId}, ${content}, ${literal}::vector)
+        RETURNING
+          id,
+          tenant_id   AS "tenantId",
+          document_id AS "documentId",
+          content,
+          created_at  AS "createdAt"
+      `;
+      return rows[0];
+    });
   }
 }

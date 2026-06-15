@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { AiModule } from '../ai/ai.module';
 import { RagModule } from '../rag/rag.module';
 import { WhatsappModule } from '../channels/whatsapp/whatsapp.module';
+import { KbModule } from '../kb/kb.module';
+import { SettingsModule } from '../operations/settings/settings.module';
 import { InboundProcessor } from './inbound.processor';
 
 /**
@@ -14,7 +16,7 @@ import { InboundProcessor } from './inbound.processor';
  * InboundProcessor self-registers its pg-boss worker on module init.
  */
 @Module({
-  imports: [AiModule, RagModule, WhatsappModule],
+  imports: [AiModule, RagModule, WhatsappModule, KbModule, SettingsModule],
   providers: [InboundProcessor],
 })
 export class ConversationsModule {}

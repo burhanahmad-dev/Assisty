@@ -45,20 +45,26 @@ export class ChannelConnectionsRepository {
     return rows[0] ?? null;
   }
 
-  async findById(id: string): Promise<ChannelConnectionRow | null> {
-    const rows = await this.db.sql<ChannelConnectionRow[]>`
-      SELECT
-        id,
-        tenant_id        AS "tenantId",
-        type,
-        external_id      AS "externalId",
-        access_token     AS "accessToken",
-        phone_number_id  AS "phoneNumberId",
-        status
-      FROM channel_connections
-      WHERE id = ${id}
-      LIMIT 1
-    `;
-    return rows[0] ?? null;
+  /** Tenant-scoped: the connection must belong to the resolved tenant. */
+  async findById(
+    tenantId: string,
+    id: string,
+  ): Promise<ChannelConnectionRow | null> {
+    return this.db.scoped(tenantId, async (sql) => {
+      const rows = await sql<ChannelConnectionRow[]>`
+        SELECT
+          id,
+          tenant_id        AS "tenantId",
+          type,
+          external_id      AS "externalId",
+          access_token     AS "accessToken",
+          phone_number_id  AS "phoneNumberId",
+          status
+        FROM channel_connections
+        WHERE id = ${id}
+        LIMIT 1
+      `;
+      return rows[0] ?? null;
+    });
   }
 }

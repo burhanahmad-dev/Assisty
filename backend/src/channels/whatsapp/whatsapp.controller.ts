@@ -21,6 +21,7 @@ import { QUEUES } from '../../queue/queue.constants';
 import type { InboundJobData } from '../channel.types';
 import { WhatsappService } from './whatsapp.service';
 import { verifySignature } from './whatsapp.signature';
+import { Public } from '../../auth/public.decorator';
 
 /**
  * WhatsApp Cloud API webhook endpoint.
@@ -34,6 +35,7 @@ import { verifySignature } from './whatsapp.signature';
  * quickly (except a 403 on a failed signature) so Meta does not retry-storm us;
  * a parse/enqueue error for one message never blocks the 200.
  */
+@Public()
 @Controller('webhooks/whatsapp')
 export class WhatsappController {
   private readonly provider = 'whatsapp';

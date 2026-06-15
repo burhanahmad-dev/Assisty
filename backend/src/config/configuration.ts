@@ -12,12 +12,26 @@ export interface AppConfig {
   database: {
     url: string;
   };
+  /** Supabase Auth — operator login + JWT verification. */
+  auth: {
+    supabaseUrl: string;
+    supabaseAnonKey: string;
+    /** Legacy HS256 secret; when absent we verify via the project JWKS. */
+    jwtSecret?: string;
+  };
   litellm: {
+    baseUrl: string;
+    apiKey: string;
+  };
+  /** Optional OpenRouter chat gateway. When apiKey is set, chat uses this; embeddings stay on litellm. */
+  openrouter: {
     baseUrl: string;
     apiKey: string;
   };
   ai: {
     defaultChatModel: string;
+    /** Optional OpenRouter fallback models (auto-route around throttled ones). */
+    fallbackChatModels: string[];
     embeddingModel: string;
     embeddingDim: number;
   };
@@ -41,6 +55,11 @@ export interface AppConfig {
 export default function configuration(): AppConfig {
   const env = envSchema.parse(process.env);
 
+  const fallbackChatModels = (env.FALLBACK_CHAT_MODELS ?? '')
+    .split(',')
+    .map((m) => m.trim())
+    .filter((m) => m.length > 0);
+
   return {
     env: env.NODE_ENV,
     port: env.PORT,
@@ -49,12 +68,22 @@ export default function configuration(): AppConfig {
     database: {
       url: env.DATABASE_URL,
     },
+    auth: {
+      supabaseUrl: env.SUPABASE_URL,
+      supabaseAnonKey: env.SUPABASE_ANON_KEY,
+      jwtSecret: env.SUPABASE_JWT_SECRET,
+    },
     litellm: {
       baseUrl: env.LITELLM_BASE_URL,
       apiKey: env.LITELLM_API_KEY,
     },
+    openrouter: {
+      baseUrl: env.OPENROUTER_BASE_URL,
+      apiKey: env.OPENROUTER_API_KEY ?? '',
+    },
     ai: {
       defaultChatModel: env.DEFAULT_CHAT_MODEL,
+      fallbackChatModels,
       embeddingModel: env.EMBEDDING_MODEL,
       embeddingDim: env.EMBEDDING_DIM,
     },

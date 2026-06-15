@@ -28,23 +28,25 @@ export class ConversationsRepository {
     channelConnectionId: string,
     customerExternalId: string,
   ): Promise<ConversationRow> {
-    const rows = await this.db.sql<ConversationRow[]>`
-      INSERT INTO conversations
-        (tenant_id, channel_connection_id, customer_external_id, status, last_message_at)
-      VALUES
-        (${tenantId}, ${channelConnectionId}, ${customerExternalId}, 'open', now())
-      ON CONFLICT (channel_connection_id, customer_external_id)
-      DO UPDATE SET last_message_at = now()
-      RETURNING
-        id,
-        tenant_id             AS "tenantId",
-        channel_connection_id AS "channelConnectionId",
-        customer_external_id  AS "customerExternalId",
-        status,
-        last_message_at       AS "lastMessageAt",
-        created_at            AS "createdAt"
-    `;
-    return rows[0];
+    return this.db.scoped(tenantId, async (sql) => {
+      const rows = await sql<ConversationRow[]>`
+        INSERT INTO conversations
+          (tenant_id, channel_connection_id, customer_external_id, status, last_message_at)
+        VALUES
+          (${tenantId}, ${channelConnectionId}, ${customerExternalId}, 'open', now())
+        ON CONFLICT (channel_connection_id, customer_external_id)
+        DO UPDATE SET last_message_at = now()
+        RETURNING
+          id,
+          tenant_id             AS "tenantId",
+          channel_connection_id AS "channelConnectionId",
+          customer_external_id  AS "customerExternalId",
+          status,
+          last_message_at       AS "lastMessageAt",
+          created_at            AS "createdAt"
+      `;
+      return rows[0];
+    });
   }
 
   /** Bump last_message_at to keep conversation ordering fresh. */

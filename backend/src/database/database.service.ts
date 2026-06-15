@@ -1,7 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
-import postgres, { type Sql } from 'postgres';
+import postgres, { type Sql, type TransactionSql } from 'postgres';
 import type { AppConfig } from '../config/configuration';
 
 /**
@@ -33,6 +33,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     // Fail fast if the database is unreachable at boot.
     await this.sql`select 1`;
     this.logger.info('Database connection established');
+  }
+
+  /**
+   * Run `fn` inside a TENANT-SCOPED transaction so Postgres RLS enforces
+   * isolation: it sets `app.tenant_id` then `SET LOCAL ROLE assisty_app` (a
+   * NOBYPASSRLS, non-owner role), both reset on commit. ALL tenant data access
+   * MUST go through here.
+   *
+   * The raw `sql` (admin/postgres connection) BYPASSES RLS and is reserved for
+   * tenant RESOLUTION + infra only (auth lookup/bootstrap, webhook dedupe,
+   * health) — never for serving tenant data.
+   */
+  async scoped<T>(
+    tenantId: string,
+    fn: (sql: TransactionSql) => Promise<T>,
+  ): Promise<T> {
+    return this.sql.begin(async (tx) => {
+      await tx`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+      await tx.unsafe('SET LOCAL ROLE assisty_app');
+      return fn(tx);
+    }) as unknown as Promise<T>;
   }
 
   async onModuleDestroy(): Promise<void> {

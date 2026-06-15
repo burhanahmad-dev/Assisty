@@ -15,12 +15,27 @@ export const envSchema = z.object({
   // Database (postgres.js connection string)
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
-  // LiteLLM proxy (OpenAI-compatible)
+  // Supabase Auth — operator login. JWTs are verified against the project JWKS
+  // (asymmetric, handles rotation); SUPABASE_JWT_SECRET is only for legacy HS256.
+  SUPABASE_URL: z.string().min(1, 'SUPABASE_URL is required'),
+  SUPABASE_ANON_KEY: z.string().min(1, 'SUPABASE_ANON_KEY is required'),
+  SUPABASE_JWT_SECRET: z.string().optional(),
+
+  // LiteLLM proxy (OpenAI-compatible) — also used as the EMBEDDINGS endpoint (Gemini).
   LITELLM_BASE_URL: z.string().min(1, 'LITELLM_BASE_URL is required'),
   LITELLM_API_KEY: z.string().min(1, 'LITELLM_API_KEY is required'),
 
+  // OpenRouter (optional) — unified gateway for Gemini/OpenAI/DeepSeek CHAT models.
+  // When OPENROUTER_API_KEY is set, chat routes through OpenRouter; embeddings
+  // still use LITELLM_* (OpenRouter has no embeddings endpoint).
+  OPENROUTER_BASE_URL: z.string().default('https://openrouter.ai/api/v1'),
+  OPENROUTER_API_KEY: z.string().optional(),
+
   // AI models
   DEFAULT_CHAT_MODEL: z.string().default('gpt-4o-mini'),
+  // Optional comma-separated OpenRouter fallback models (auto-route around a
+  // throttled/unavailable primary — very helpful on the free tier).
+  FALLBACK_CHAT_MODELS: z.string().optional(),
   EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
   EMBEDDING_DIM: z.coerce.number().int().positive().default(1536),
 

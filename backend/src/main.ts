@@ -15,6 +15,9 @@ async function bootstrap(): Promise<void> {
   // Replace Nest's default logger with nestjs-pino's structured logger.
   app.useLogger(app.get(Logger));
 
+  // Allow the embeddable website widget (loaded on any site) to call the API.
+  app.enableCors({ origin: true });
+
   // Ensure onModuleDestroy hooks (DB close, pg-boss stop) run on SIGTERM/SIGINT.
   app.enableShutdownHooks();
 

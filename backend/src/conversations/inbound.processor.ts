@@ -14,6 +14,8 @@ import {
 } from '../database/repositories/messages.repository';
 import { ChannelConnectionsRepository } from '../database/repositories/channel-connections.repository';
 import { UsageRepository } from '../database/repositories/usage.repository';
+import { KbService } from '../kb/kb.service';
+import { SettingsService } from '../operations/settings/settings.service';
 
 /**
  * Sent to the customer when the AI cannot produce a reply (even after the
@@ -63,6 +65,8 @@ export class InboundProcessor implements OnModuleInit {
     private readonly messages: MessagesRepository,
     private readonly channelConnections: ChannelConnectionsRepository,
     private readonly usage: UsageRepository,
+    private readonly kb: KbService,
+    private readonly settings: SettingsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -113,12 +117,29 @@ export class InboundProcessor implements OnModuleInit {
       const chunks = await this.rag.retrieve(tenantId, text);
       const contextBlock = this.rag.buildContextBlock(chunks);
 
-      // (4) Build the chat prompt from persona + context + recent history.
+      // (4) Load THIS tenant's persona (Master Prompt) + custom commands (Agent
+      //     Memory), then build the prompt from persona + rules + context +
+      //     recent history. Both are per-tenant, so each business's WhatsApp
+      //     agent follows its own configured behaviour.
+      const [persona, rules, settings] = await Promise.all([
+        this.kb.getAgentInstructions(tenantId),
+        this.kb.getCustomRules(tenantId),
+        this.settings.get(tenantId),
+      ]);
+      const selectedModel =
+        settings.model && settings.model.trim() ? settings.model.trim() : undefined;
       const history = await this.messages.recentByConversation(
+        tenantId,
         conversation.id,
         InboundProcessor.HISTORY_LIMIT,
       );
-      const promptMessages = this.buildMessages(contextBlock, history, text);
+      const promptMessages = this.buildMessages(
+        contextBlock,
+        history,
+        text,
+        persona,
+        rules,
+      );
 
       // (5) Chat completion WITH graceful fallback. AiService already does one
       //     internal retry on 429/5xx; if it still fails we reply with a
@@ -129,7 +150,7 @@ export class InboundProcessor implements OnModuleInit {
       let usedFallback = false;
 
       try {
-        const result = await this.ai.chat({ messages: promptMessages });
+        const result = await this.ai.chat({ messages: promptMessages, model: selectedModel });
         reply = result.content.trim();
         if (!reply) {
           throw new Error('AI returned an empty completion');
@@ -158,7 +179,7 @@ export class InboundProcessor implements OnModuleInit {
       // (7) Send the reply over the originating channel. A failure here throws
       //     -> pg-boss retries (step 2 keeps that safe).
       const connection =
-        await this.channelConnections.findById(channelConnectionId);
+        await this.channelConnections.findById(tenantId, channelConnectionId);
       if (!connection) {
         throw new Error(
           `Channel connection ${channelConnectionId} not found while replying`,
@@ -169,8 +190,8 @@ export class InboundProcessor implements OnModuleInit {
       // (8) Record usage. Best-effort: a ledger write failure must not undo a
       //     delivered reply or trigger a retry that would double-send.
       try {
-        await this.usage.record(tenantId, 'ai_tokens', usageTokens);
-        await this.usage.record(tenantId, 'messages', 1);
+        await this.usage.record(tenantId, 'ai_tokens', usageTokens, model);
+        await this.usage.record(tenantId, 'messages', 1, model);
       } catch (usageErr) {
         this.logger.warn({
           msg: 'inbound.usage.record_failed',
@@ -208,9 +229,11 @@ export class InboundProcessor implements OnModuleInit {
     contextBlock: string,
     history: MessageRow[],
     userText: string,
+    persona: string,
+    rules: Array<{ label?: string; instruction: string }>,
   ): ChatMessage[] {
     const messages: ChatMessage[] = [
-      { role: 'system', content: this.systemPrompt(contextBlock) },
+      { role: 'system', content: this.systemPrompt(contextBlock, persona, rules) },
     ];
 
     for (const msg of history) {
@@ -224,17 +247,34 @@ export class InboundProcessor implements OnModuleInit {
     return messages;
   }
 
-  /** The assistant persona + grounding instructions + retrieved context. */
-  private systemPrompt(contextBlock: string): string {
+  /**
+   * The assistant persona (tenant Master Prompt) + custom commands (Agent
+   * Memory) + grounding instructions + retrieved context. Persona and rules are
+   * per-tenant, so each business's WhatsApp agent follows its own configuration.
+   */
+  private systemPrompt(
+    contextBlock: string,
+    persona: string,
+    rules: Array<{ label?: string; instruction: string }>,
+  ): string {
     const base =
-      'You are Assisty, a helpful, concise customer-support assistant. ' +
-      'Answer ONLY using the context provided below. ' +
-      'If the answer is not in the context, say you are not sure and offer to ' +
-      'connect the customer with a human. Do not invent facts.';
+      persona && persona.trim()
+        ? persona.trim()
+        : 'You are Assisty, a helpful, concise customer-support assistant.';
 
-    if (!contextBlock) {
-      return `${base}\n\nContext:\n(no relevant context found)`;
-    }
-    return `${base}\n\nContext:\n${contextBlock}`;
+    const grounding =
+      'Answer using the context below. If the answer is not in the context, say you ' +
+      'are not sure and offer to connect the customer with a human. Do not invent facts.';
+
+    const rulesText = (rules ?? [])
+      .filter((r) => r && r.instruction && r.instruction.trim())
+      .map((r) => '- ' + (r.label ? `When ${r.label}: ` : '') + r.instruction.trim())
+      .join('\n');
+    const rulesBlock = rulesText
+      ? `\n\nBUSINESS RULES (instructions from the business — always follow them when they apply):\n${rulesText}`
+      : '';
+
+    const ctx = contextBlock ? contextBlock : '(no relevant context found)';
+    return `${base}\n\n${grounding}${rulesBlock}\n\nContext:\n${ctx}`;
   }
 }
