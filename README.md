@@ -1,11 +1,6 @@
 # Assisty
 
-**AI-automated customer-service SaaS** — a Flutter app where a business connects its messaging channels (WhatsApp, Website, Email, Facebook Messenger, Instagram), fills a Knowledge Base, and Assisty's AI answers their customers automatically, grounded in that business's own data, with per-tenant privacy and hard spend caps.
-
-> **Status:** Architecture/blueprint complete ✅ · Code not started yet ⬜
-> **Backend:** Supabase (Postgres + pgvector + RLS + Auth + Storage + Queues/pgmq + Vault) · **Compute:** NestJS on Cloud Run/Fly · **AI:** LiteLLM gateway (GPT / Gemini) · **App:** Flutter + Riverpod 2
-
----
+**AI-automated customer-service SaaS** — a Flutter app where a business connects its messaging channels (WhatsApp, Website, Email, Facebook Messenger, Instagram), fills a Knowledge Base, and Assisty's AI answers their customers automatically, grounded in that business's own data, with per-tenant privacy and hard spend caps.ge + Queues/pgmq + Vault) · **Compute:** NestJS on Cloud Run/Fly · **AI:** LiteLLM gateway (GPT / Gemini) · **App:** Flutter + Riverpod 2
 
 ## 📖 Documentation — read in this order
 
@@ -29,18 +24,6 @@
 
 ---
 
-## 🗂️ Planned repo structure
-
-```
-Assisty/
-├── README.md            ← you are here
-├── docs/                ← architecture docs + ADRs (complete)
-├── app/                 ← Flutter app (Riverpod 2, GoRouter, supabase_flutter, FCM)   [not started]
-├── backend/             ← NestJS edge + AI worker, LiteLLM config                      [not started]
-├── supabase/            ← SQL migrations: tables + RLS + pgvector + pgmq + pg_cron      [not started]
-└── workflow/            ← internal doc-generation scripts (not part of the product)
-```
-
 ## 🚦 Roadmap (high level)
 - **Phase 0** — Supabase schema + RLS, auth, tenant bootstrap, Flutter dashboard shell
 - **Phase 1** — WhatsApp end-to-end (inbound → AI → reply)
@@ -63,33 +46,3 @@ The backend is a NestJS monolith on Postgres (pgvector) with a LiteLLM gateway,
 all wired up via Docker Compose.
 
 ```bash
-# 1. Configure env (no real secrets in the example)
-cp .env.example .env
-# edit .env: set OPENAI_API_KEY, LITELLM_MASTER_KEY (= LITELLM_API_KEY),
-#            WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET
-
-# 2. Start postgres + litellm + api
-docker compose up --build
-
-# 3. Apply SQL migrations (idempotent)
-docker compose exec api npm run migrate
-#   ...or from the host against localhost:5432:
-#   cd backend && DATABASE_URL=postgresql://assisty:assisty@localhost:5432/assisty npm run migrate
-
-# 4. Verify
-curl http://localhost:3000/health
-curl http://localhost:3000/health/db
-```
-
-Services: **postgres** (5432, pgvector + queue), **litellm** (4000, model gateway),
-**api** (3000, NestJS `start:dev`). `pg-boss` provisions its own queue schema on
-boot — no manual setup.
-
-## Deploy
-
-Production runs on **Railway** (builds `backend/Dockerfile`, health check at
-`/health`) against **Supabase** hosted Postgres. LiteLLM can run as a second
-Railway service or be replaced by pointing `LITELLM_BASE_URL` straight at
-OpenRouter. WhatsApp webhooks land at `/webhooks/whatsapp` (Meta verify token +
-`X-Hub-Signature-256` HMAC). Full instructions, env var list, and Meta webhook
-setup are in [docs/DEPLOY.md](./docs/DEPLOY.md).
