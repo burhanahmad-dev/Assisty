@@ -39,6 +39,10 @@ export const envSchema = z.object({
   EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
   EMBEDDING_DIM: z.coerce.number().int().positive().default(1536),
 
+  // Encryption — base64 32-byte master key. Per-tenant keys derived via HKDF;
+  // used to encrypt channel access tokens (WhatsApp/Messenger/Instagram) at rest.
+  ENCRYPTION_MASTER_KEY: z.string().min(1, 'ENCRYPTION_MASTER_KEY is required'),
+
   // WhatsApp (Meta Cloud API)
   WHATSAPP_VERIFY_TOKEN: z.string().min(1, 'WHATSAPP_VERIFY_TOKEN is required'),
   WHATSAPP_APP_SECRET: z.string().min(1, 'WHATSAPP_APP_SECRET is required'),

@@ -12,6 +12,7 @@
     "start:prod": "node dist/src/main.js",
     "migrate": "ts-node scripts/migrate.ts",
     "test:rls": "ts-node scripts/test-rls.ts",
+    "test:crypto": "ts-node scripts/test-crypto.ts",
     "seed": "ts-node scripts/seed.ts",
     "send:test": "ts-node scripts/send-test-webhook.ts",
     "check:ai": "ts-node scripts/check-openrouter.ts",

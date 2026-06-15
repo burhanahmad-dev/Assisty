@@ -9,6 +9,7 @@ import { validate } from './config/env.validation';
 
 import { DatabaseModule } from './database/database.module';
 import { QueueModule } from './queue/queue.module';
+import { CryptoModule } from './crypto/crypto.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { WhatsappModule } from './channels/whatsapp/whatsapp.module';
@@ -45,6 +46,7 @@ import { WebModule } from './web/web.module';
 
     // 3. Global infrastructure.
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 120 }]), // 120 req/min/IP default
+    CryptoModule, // @Global — channel-token encryption at rest
     DatabaseModule,
     QueueModule,
     AuthModule, // registers the global AuthGuard

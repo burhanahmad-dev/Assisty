@@ -19,6 +19,10 @@ export interface AppConfig {
     /** Legacy HS256 secret; when absent we verify via the project JWKS. */
     jwtSecret?: string;
   };
+  /** Encryption — base64 master key for per-tenant AES-256-GCM (HKDF-derived). */
+  crypto: {
+    masterKey: string;
+  };
   litellm: {
     baseUrl: string;
     apiKey: string;
@@ -72,6 +76,9 @@ export default function configuration(): AppConfig {
       supabaseUrl: env.SUPABASE_URL,
       supabaseAnonKey: env.SUPABASE_ANON_KEY,
       jwtSecret: env.SUPABASE_JWT_SECRET,
+    },
+    crypto: {
+      masterKey: env.ENCRYPTION_MASTER_KEY,
     },
     litellm: {
       baseUrl: env.LITELLM_BASE_URL,
