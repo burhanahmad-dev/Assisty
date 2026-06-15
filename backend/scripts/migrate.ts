@@ -52,11 +52,16 @@ async function main(): Promise<void> {
       const contents = readFileSync(fullPath, 'utf8');
 
       console.log(`[migrate] applying ${file} ...`);
-      // Run the whole file as one script inside a transaction. sql.unsafe is
-      // required because the file contains multiple statements / DDL.
-      await sql.begin(async (tx) => {
-        await tx.unsafe(contents);
-      });
+      // Most files run as one transaction. Files marked `-- migrate:no-transaction`
+      // (e.g. role + RLS DDL, which doesn't wrap cleanly in a single pooled
+      // transaction over Supabase's pooler) run in autocommit instead.
+      if (/^\s*--\s*migrate:no-transaction/m.test(contents)) {
+        await sql.unsafe(contents);
+      } else {
+        await sql.begin(async (tx) => {
+          await tx.unsafe(contents);
+        });
+      }
       console.log(`[migrate] applied  ${file}`);
     }
 
