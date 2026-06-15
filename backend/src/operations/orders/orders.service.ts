@@ -121,13 +121,23 @@ export class OrdersService {
     const status = settings.autoConfirmOrders ? 'confirmed' : 'pending';
     const currency = dto.currency ?? settings.currency;
 
-    const rows = await this.db.scoped(tenantId, (sql) => sql`
-      INSERT INTO orders (tenant_id, customer_ref, customer_name, status, items, subtotal, total, currency, shipping_address)
-      VALUES (${tenantId}, ${dto.customerRef ?? null}, ${dto.customerName ?? null}, ${status},
-              ${sql.json(items)}, ${subtotal}, ${subtotal}, ${currency}, ${dto.shippingAddress ?? null})
-      RETURNING *
-    `);
-    return this.map(rows[0]);
+    const order = await this.db.scoped(tenantId, async (sql) => {
+      const rows = await sql`
+        INSERT INTO orders (tenant_id, customer_ref, customer_name, status, items, subtotal, total, currency, shipping_address)
+        VALUES (${tenantId}, ${dto.customerRef ?? null}, ${dto.customerName ?? null}, ${status},
+                ${sql.json(items)}, ${subtotal}, ${subtotal}, ${currency}, ${dto.shippingAddress ?? null})
+        RETURNING *
+      `;
+      // Decrement inventory for catalog-linked items so stock stays accurate.
+      for (const i of items) {
+        if (i.productId) {
+          await sql`UPDATE products SET stock = GREATEST(0, stock - ${i.qty}), updated_at = now()
+                    WHERE id = ${i.productId} AND tenant_id = ${tenantId}`;
+        }
+      }
+      return rows[0];
+    });
+    return this.map(order);
   }
 
   async updateStatus(tenantId: string, id: string, status: string): Promise<OrderRow> {

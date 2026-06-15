@@ -12,7 +12,8 @@ import { RagService } from '../rag/rag.service';
 import { AiService, type ChatMessage } from '../ai/ai.service';
 import { CommerceService } from './commerce.service';
 import { SettingsService } from '../operations/settings/settings.service';
-import type { ProductRow } from '../operations/catalog/catalog.service';
+import { OrdersService } from '../operations/orders/orders.service';
+import { CatalogService, type ProductRow } from '../operations/catalog/catalog.service';
 import {
   type Suggestions,
   type ModelSuggestion,
@@ -34,6 +35,8 @@ export interface WebChatResult {
   contextHits: number;
   usageTokens: number;
   suggestions: Suggestions;
+  /** Set when the model placed an order this turn (verified + written to DB). */
+  order?: { orderNumber: string; total: number; currency: string } | null;
 }
 
 /**
@@ -59,6 +62,8 @@ export class WebChatService {
     private readonly ai: AiService,
     private readonly commerce: CommerceService,
     private readonly settings: SettingsService,
+    private readonly orders: OrdersService,
+    private readonly catalog: CatalogService,
   ) {}
 
   async chat(sessionId: string, text: string, businessContext?: string): Promise<WebChatResult> {
@@ -146,6 +151,52 @@ export class WebChatService {
       ? EMPTY_SUGGESTIONS
       : this.groundSuggestions(modelSugg, commerce.candidates);
 
+    // Model-driven order placement — only on explicit confirmation, verified
+    // against the REAL product + live inventory. The order is built from the
+    // catalog row (never the model's text), so it always matches what was shown,
+    // and the model cannot oversell or fabricate an order/total.
+    let placedOrder: { orderNumber: string; total: number; currency: string } | null = null;
+    const po = !usedFallback ? modelSugg.placeOrder : undefined;
+    // Server-side confirmation gate: only place when the customer's CURRENT message
+    // is an explicit confirmation. Prevents premature/duplicate orders even if the
+    // model sets placeOrder too eagerly while still just proposing.
+    const confirmed =
+      /\b(yes|yeah|yep|yup|sure|okay|ok|confirm(ed|s)?|place(?:\s+the)?\s+order|order\s+it|go\s+ahead|do\s+it|proceed|haan|haanji|theek|kardo|kar\s*do|place\s*kar|order\s*kar|confirm\s*kar)\b/i.test(
+        message,
+      );
+    if (po && po.productId && !confirmed) {
+      this.logger.log({ msg: 'web.chat.order.awaiting_confirmation', session });
+    } else if (po && po.productId && confirmed) {
+      const qty = Math.max(1, Math.floor(Number(po.quantity) || 1));
+      const prod = await this.catalog.getById(tenantId, po.productId);
+      if (!prod || !prod.active) {
+        this.logger.warn({ msg: 'web.chat.order.unknown_product', session, productId: po.productId });
+      } else if (prod.stock < qty) {
+        reply += `\n\n⚠️ Sorry — "${prod.name}" only has ${prod.stock} in stock, so I couldn't place that order.`;
+      } else {
+        try {
+          const created = await this.orders.create(tenantId, {
+            items: [{ name: prod.name, price: prod.price, qty, productId: prod.id, options: po.options ?? {} }],
+            customerRef: session,
+            customerName: 'Web Customer',
+          });
+          placedOrder = { orderNumber: created.orderNumber, total: created.total, currency: created.currency };
+          const optStr =
+            po.options && Object.keys(po.options).length
+              ? ' (' + Object.entries(po.options).map(([k, v]) => `${k}: ${v}`).join(', ') + ')'
+              : '';
+          reply += `\n\n✅ Order #${created.orderNumber} confirmed: ${qty}× ${prod.name}${optStr} — total ${created.currency} ${created.total}. Say "where is order ${created.orderNumber}?" to track it.`;
+        } catch (err) {
+          this.logger.error({
+            msg: 'web.chat.order.failed',
+            session,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          reply += `\n\n⚠️ Sorry — I couldn't place that order just now. Please try again in a moment.`;
+        }
+      }
+    }
+
     await this.messages.insertOutbound({
       tenantId,
       conversationId: conversation.id,
@@ -182,6 +233,7 @@ export class WebChatService {
       contextHits: chunks.length,
       usageTokens,
       suggestions,
+      order: placedOrder,
     };
   }
 
@@ -334,6 +386,7 @@ export class WebChatService {
       '- Do not bolt a canned closing line onto every reply. Only ask a follow-up when it genuinely moves things forward.',
       '- Answer the real question first, in about 1 to 3 short sentences. Add more only if asked.',
       "- Speak AS the business using we and our. Vary your wording. Mirror the customer's language and energy.",
+      '- NEVER address the customer by a name, and never invent, guess, or use a placeholder name. Only use their name if they have explicitly given it in THIS conversation.',
     ].join('\n');
 
     const grounding = [
@@ -341,6 +394,8 @@ export class WebChatService {
       '- This assistant serves ANY kind of business. Work out what THIS business does from the business information below — never assume an industry.',
       '- Use ONLY the business information below for facts (services, products, prices, hours, policies, orders). Never invent any.',
       '- For order / tracking / payment / invoice questions, use ONLY the "LIVE ORDER DATA" section if present; if it is absent, ask for the order number.',
+      '- PLACING ORDERS (in chat): when the customer wants to buy, FIRST confirm the exact product, quantity and options, and state the price from AVAILABLE PRODUCTS, then wait for a clear "yes". ONLY after they explicitly confirm, set suggestions.placeOrder = { "productId": "<id from AVAILABLE PRODUCTS>", "quantity": <n>, "options": { ... } }. Order only in-stock items. The SYSTEM then places the order from the REAL catalog product and appends the exact confirmation (order number, items, total) — you must NEVER invent an order number/total/status, and never set placeOrder before an explicit confirmation. If unsure which product or how many, ask — do not guess.',
+      '- Your reply must match the products in suggestions.productIds / placeOrder — never describe a different product than the one being ordered.',
       "- If you don't have something, say so briefly and offer to take a message or bring in a human.",
     ].join('\n');
 
@@ -351,7 +406,8 @@ export class WebChatService {
       '  "suggestions": {',
       '    "productIds": ["<id copied verbatim from AVAILABLE PRODUCTS that is genuinely relevant>"],',
       '    "attributePrompts": [ { "attribute": "<next detail to ask, named for THIS business>", "options": ["<choice>"] } ],',
-      '    "quickReplies": [ { "label": "<short tappable next step>" } ]',
+      '    "quickReplies": [ { "label": "<short tappable next step>" } ],',
+      '    "placeOrder": { "productId": "<id from AVAILABLE PRODUCTS>", "quantity": 1, "options": {} }  // include ONLY after the customer explicitly confirms a purchase; OMIT otherwise',
       '  }',
       '}',
       'MAKING SUGGESTIONS PROFESSIONAL (adapt EVERYTHING to THIS business — never hardcode an industry):',

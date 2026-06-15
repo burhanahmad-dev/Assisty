@@ -53,6 +53,12 @@ export interface ModelSuggestion {
   /** Next details to ask — attribute names chosen by the model for this business. */
   attributePrompts?: Array<{ attribute?: string; options?: string[] }>;
   quickReplies?: Array<{ label?: string; action?: string; payload?: unknown }>;
+  /**
+   * Set ONLY after the customer explicitly confirms a purchase. The backend
+   * verifies the product + inventory and places the order from the REAL catalog
+   * row (the model never decides price/availability or the order number).
+   */
+  placeOrder?: { productId?: string; quantity?: number; options?: Record<string, string> };
 }
 
 /** What the model returns: the human-facing reply + structured suggestions. */

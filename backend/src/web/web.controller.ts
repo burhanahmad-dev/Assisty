@@ -123,6 +123,7 @@ const TEST_PAGE_HTML = `<!doctype html>
   <h1>🤖 Assisty — Operator Console</h1>
   <span id="health" class="badge">checking…</span>
   <span class="meta" id="model">model: —</span>
+  <span class="meta" id="modelUsage"></span>
   <span class="spacer"></span>
   <span class="meta" id="who"></span>
   <a class="link" href="/widget-demo" target="_blank">🌐 widget demo ↗</a>
@@ -184,6 +185,11 @@ const TEST_PAGE_HTML = `<!doctype html>
     </div>
     <div class="cardfoot"><button id="saveProduct">Add product</button><button class="sec" id="clearProduct">Clear</button><span class="status" id="st_product"></span></div>
   </div>
+  <div class="card"><h3>📄 Import from Excel / CSV</h3>
+    <p class="sub">Upload .xlsx or .csv. Recognised columns: name, price, sku/code, stock, category, description, sizes, colours. Imported into THIS business only (re-import updates by SKU).</p>
+    <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="font-size:12px" />
+    <div class="cardfoot"><button id="importBtn">Import file</button><span class="status" id="st_import"></span></div>
+  </div>
   <div class="card"><h3>🛍️ Products</h3><div id="productList"><span class="meta">loading…</span></div></div>
 </div></div>
 
@@ -220,6 +226,7 @@ const TEST_PAGE_HTML = `<!doctype html>
   <div class="hint">Answers from the Knowledge Base (RAG) + live order/catalog data (relational). Try "what do you sell?", "where is order 1001?", or ask for a product to get suggestions.</div>
 </footer>
 
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script>
   /* ---- Auth (Supabase operator login) ---- */
   var ASSISTY_TOKEN = localStorage.getItem('assisty_token') || '';
@@ -310,8 +317,9 @@ const TEST_PAGE_HTML = `<!doctype html>
   async function ping(){ var el=$('health'); try{ var j=await (await fetch('/health/db')).json(); if(j.db==='up'){el.textContent='API + DB up';el.className='badge ok';}else{el.textContent='DB down';el.className='badge bad';} }catch(e){el.textContent='API down';el.className='badge bad';} }
   async function loadHistory(){ log.innerHTML=''; try{ var rows=await (await fetch('/web/messages?sessionId='+encodeURIComponent(sessionId))).json(); rows.forEach(function(m){ addBubble(m.direction==='inbound'?'user':'agent', m.content||'', m.direction==='outbound'&&m.model?('model: '+m.model):''); }); }catch(e){} }
   async function send(preset){ var text=(preset!=null?String(preset):input.value).trim(); if(!text) return; if(preset==null) input.value=''; sendBtn.disabled=true; addBubble('user',text,''); var pending=addBubble('agent','…','thinking');
-    try{ var j=await api('POST','/web/chat',{sessionId:sessionId,text:text}); pending.querySelector('.bubble').textContent=j.reply; pending.querySelector('.turnmeta').innerHTML=escapeHtml('model: '+j.model+' · ctx '+j.contextHits)+(j.usedFallback?'<span class="fallback">FALLBACK</span>':''); $('model').textContent='model: '+j.model; renderSuggestions(j.suggestions); }
+    try{ var j=await api('POST','/web/chat',{sessionId:sessionId,text:text}); pending.querySelector('.bubble').textContent=j.reply; pending.querySelector('.turnmeta').innerHTML=escapeHtml('model: '+j.model+' · ctx '+j.contextHits)+(j.usedFallback?'<span class="fallback">FALLBACK</span>':''); $('model').textContent='model: '+j.model; renderSuggestions(j.suggestions); updateModelUsage(j.model); }
     catch(e){ pending.querySelector('.bubble').textContent='[error] '+e.message; } finally{ sendBtn.disabled=false; input.focus(); } }
+  async function updateModelUsage(model){ try{ var j=await (await fetch('/settings/usage')).json(); var rows=(j&&j.usage)||[]; var key=model?String(model).split('/').pop():''; var row=rows.filter(function(r){ return r.model===model || (key && r.model && r.model.indexOf(key)>=0); })[0]; var el=$('modelUsage'); if(!el) return; if(row){ el.textContent='· '+(row.tokens||0).toLocaleString()+' tok / '+(row.messages||0)+' msgs'; } else { var tot=rows.reduce(function(a,r){return a+(r.tokens||0);},0); el.textContent='· '+tot.toLocaleString()+' tok total'; } }catch(e){} }
   sendBtn.addEventListener('click', function(){ send(); }); input.addEventListener('keydown', function(e){ if(e.key==='Enter') send(); });
   $('newsess').addEventListener('click', function(){ sessionId='web-'+Math.random().toString(36).slice(2,10); localStorage.setItem('assisty_session',sessionId); $('session').textContent='session: '+sessionId; log.innerHTML=''; showTab('chat'); input.focus(); });
 
@@ -351,6 +359,9 @@ const TEST_PAGE_HTML = `<!doctype html>
   async function loadCatalog(){ var box=$('productList'); box.innerHTML='<span class="meta">loading…</span>'; try{ var rows=await (await fetch('/catalog/products')).json(); if(!rows.length){ box.innerHTML='<span class="meta">No products yet. Add one above.</span>'; return; } box.innerHTML=''; rows.forEach(function(p){ var d=document.createElement('div'); d.className='prodrow'; d.innerHTML='<div style="flex:1"><b>'+escapeHtml(p.name)+'</b> <span class="meta">'+escapeHtml(p.category||'')+'</span><br><span class="pr" style="color:#6ee7b7">'+escapeHtml(p.currency)+' '+p.price+'</span> · stock '+p.stock+(p.options&&p.options.sizes&&p.options.sizes.length?(' · sizes '+p.options.sizes.join(',')):'')+(p.options&&p.options.colours&&p.options.colours.length?(' · '+p.options.colours.join(',')):'')+'</div>'; var del=document.createElement('button'); del.className='danger sm'; del.textContent='Delete'; del.addEventListener('click', function(){ fetch('/catalog/products/'+p.id,{method:'DELETE'}).then(loadCatalog); }); d.appendChild(del); box.appendChild(d); }); }catch(e){ box.innerHTML='<span class="meta">failed</span>'; } }
   $('clearProduct').addEventListener('click', function(){ ['c_name','c_category','c_price','c_stock','c_sizes','c_colours','c_description'].forEach(function(id){ $(id).value=''; }); });
   $('saveProduct').addEventListener('click', async function(){ if(!val('c_name')){ setStatus('st_product','name required',true); return; } try{ await api('POST','/catalog/products',{name:val('c_name'),category:val('c_category'),description:val('c_description'),price:Number(val('c_price')||0),stock:Number(val('c_stock')||0),sizes:csv('c_sizes'),colours:csv('c_colours')}); setStatus('st_product','Product added'); $('clearProduct').click(); loadCatalog(); }catch(e){ setStatus('st_product',e.message,true); } });
+  /* Excel/CSV import (parsed in-browser, sent as rows) */
+  function mapImportRow(r){ var low={}; Object.keys(r).forEach(function(k){ low[String(k).trim().toLowerCase()]=r[k]; }); function pick(){ for(var i=0;i<arguments.length;i++){ var v=low[arguments[i]]; if(v!==undefined&&v!=='') return v; } return undefined; } function tocsv(v){ return v?String(v).split(/[,;|]/).map(function(s){return s.trim();}).filter(Boolean):[]; } return { name:(pick('name','product','title','item')||'').toString().trim(), sku:(pick('sku','code','product code','product_code','id')||'').toString().trim(), price:Number(pick('price','rate','amount','mrp')||0)||0, stock:Number(pick('stock','qty','quantity','inventory')||0)||0, category:(pick('category','type','cat')||'').toString().trim(), description:(pick('description','desc','details')||'').toString().trim(), sizes:tocsv(pick('sizes','size')), colours:tocsv(pick('colours','colors','colour','color')) }; }
+  $('importBtn').addEventListener('click', async function(){ var f=$('importFile').files[0]; if(!f){ setStatus('st_import','choose a file first',true); return; } if(typeof XLSX==='undefined'){ setStatus('st_import','spreadsheet library still loading — try again',true); return; } setStatus('st_import','parsing…'); try{ var buf=await f.arrayBuffer(); var wb=XLSX.read(buf,{type:'array'}); var ws=wb.Sheets[wb.SheetNames[0]]; var raw=XLSX.utils.sheet_to_json(ws,{defval:''}); var products=raw.map(mapImportRow).filter(function(p){return p.name;}); if(!products.length){ setStatus('st_import','no rows with a product name found',true); return; } var j=await api('POST','/catalog/import',{products:products}); setStatus('st_import','Imported '+(j.imported||0)+' product(s)'); loadCatalog(); }catch(e){ setStatus('st_import',e.message||'import failed',true); } });
 
   /* Orders */
   function pill(s){ return '<span class="pill '+escapeHtml(s)+'">'+escapeHtml(s)+'</span>'; }

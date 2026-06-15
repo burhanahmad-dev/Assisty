@@ -21,6 +21,15 @@ export class CatalogController {
     return this.catalog.list(tenantId);
   }
 
+  /** Bulk import products from a spreadsheet (parsed client-side into rows). */
+  @Post('import')
+  async import(
+    @CurrentTenant() tenantId: string,
+    @Body() body: { products?: ProductDto[] },
+  ): Promise<unknown> {
+    return this.catalog.importMany(tenantId, body?.products ?? []);
+  }
+
   @Post('products')
   async create(
     @CurrentTenant() tenantId: string,

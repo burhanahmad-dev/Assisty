@@ -26,17 +26,11 @@ export interface ChatModelOption {
  * free variants (e.g. ":free" suffixes) you can add.
  */
 export const CHAT_MODEL_CATALOG: ChatModelOption[] = [
-  // --- Google Gemini ---
+  // --- Google Gemini (only Gemini is active for now) ---
   { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash — fast & cheap', provider: 'Google' },
   { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro — most capable', provider: 'Google' },
   { id: 'google/gemini-2.0-flash-001', label: 'Gemini 2.0 Flash', provider: 'Google' },
-  // --- OpenAI ---
-  { id: 'openai/gpt-4o-mini', label: 'GPT-4o mini — fast & cheap', provider: 'OpenAI' },
-  { id: 'openai/gpt-4o', label: 'GPT-4o — capable', provider: 'OpenAI' },
-  { id: 'openai/gpt-4.1-mini', label: 'GPT-4.1 mini', provider: 'OpenAI' },
-  // --- DeepSeek ---
-  { id: 'deepseek/deepseek-chat', label: 'DeepSeek V3 — chat', provider: 'DeepSeek' },
-  { id: 'deepseek/deepseek-r1', label: 'DeepSeek R1 — reasoning', provider: 'DeepSeek' },
+  // OpenAI / DeepSeek removed for now — re-add here to re-enable (no other code change needed).
 ];
 
 /** Fallback when neither the tenant nor the env default specifies a model. */
